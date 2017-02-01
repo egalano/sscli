@@ -1,0 +1,120 @@
+#!/usr/bin/env python
+"""
+Usage:
+  sscli get secret <secret_name>...
+  sscli get folder [<folder_name>]...
+
+Options:
+  -v --version          Show version
+  -h --help             Show this screen.
+"""
+
+from __future__ import print_function
+from docopt import docopt
+from collections import OrderedDict
+
+from zeep import xsd
+from zeep.helpers import serialize_object
+import argparse
+import logging
+import json
+import sys
+import os
+from zeep import Client
+
+logging.basicConfig(level=logging.ERROR)
+# Set these environment variables
+SECRET_SERVER_USER=os.environ.get('SECRET_SERVER_USER')
+SECRET_SERVER_PASSWORD=os.environ.get('SECRET_SERVER_PASSWORD')
+
+# Find this at the bottom right of the secretserver site after you log in
+SECRET_SERVER_ORG = os.environ.get('SECRET_SERVER_ORG')
+
+# This WSDL is enabled in the Admin->Configuration->ApplicationSettings
+SECRET_SERVER_WSDL_URL = os.environ.get(
+        'SECRET_SERVER_WSDL_URL',
+        'https://secretserveronline.com/webservices/SSWebservice.asmx?WSDL')
+
+INIT_ERROR_MSG = '''
+Error: You must set the following environment variables:
+    export SECRET_SERVER_USER=username
+    export SECRET_SERVER_PASSWORD=password
+    export SECRET_SERVER_ORG=org'''
+
+
+class SecretServerClient(object):
+    def __init__(self):
+        if None in (SECRET_SERVER_USER, SECRET_SERVER_PASSWORD, SECRET_SERVER_ORG):
+            print(INIT_ERROR_MSG)
+            sys.exit(1)
+        self.token = None
+        self.client = Client(SECRET_SERVER_WSDL_URL)
+        self._authenticate()
+
+    def _authenticate(self):
+        resp = self.client.service.Authenticate(
+                username=SECRET_SERVER_USER,
+                password=SECRET_SERVER_PASSWORD,
+                organization=SECRET_SERVER_ORG)
+        try:
+            self.token = resp.Token
+        except AttributeError as err:
+            raise Exception("Authorization failed: {}".format(e.description))
+
+    def output(self, data):
+        serialized_data = serialize_object(data)
+        print(json.dumps(serialized_data, indent=2, sort_keys=True))
+
+    def search_secrets(self, search_string):
+        resp = self.client.service.SearchSecrets(
+                token=self.token,
+                searchTerm=search_string)
+        secret_ids = [secret.SecretId for secret in resp.SecretSummaries.SecretSummary]
+        return secret_ids
+
+    def search_folders(self, search_string=''):
+        resp = self.client.service.SearchFolders(
+                token=self.token,
+                folderName=search_string)
+        return resp
+
+    def list_folder_secrets(self, folder_name):
+        if folder_name == 0:
+            folder_name = ''
+        resp = self.search_folders(folder_name)
+        folder_id = resp.Folders.Folder[0].Id
+        search_resp = self.client.service.SearchSecretsByFolder(
+                token=self.token,
+                folderId=folder_id,
+                includeSubFolders=True)
+
+        secret_ids = [secret.SecretId for secret in search_resp.SecretSummaries.SecretSummary]
+        return secret_ids
+
+    def get_secret(self, secret_id):
+        resp = self.client.service.GetSecret(
+                token=self.token,
+                secretId=secret_id)
+        secret_name = resp.Secret.Name
+        print('Secret Name: {}'.format(secret_name))
+        for field in resp.Secret.Items.SecretItem:
+            if field.Value != None:
+                print('{}: {}'.format(field.FieldDisplayName, field.Value))
+        print()
+
+
+def main():
+    args = docopt(__doc__, version='sscli 0.1.0')
+    ssc = SecretServerClient()
+    if args['get']:
+        if args['folder']:
+            result = ssc.search_folders(' '.join(args['<folder_name>']))
+            for folder in result.Folders.Folder:
+                print(folder.Name)
+        if args['secret']:
+            result = ssc.search_secrets(' '.join(args['<secret_name>']))
+            for num in result:
+                ssc.get_secret(num)
+
+if __name__ == '__main__':
+    main()
