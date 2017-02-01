@@ -69,7 +69,10 @@ class SecretServerClient(object):
         resp = self.client.service.SearchSecrets(
                 token=self.token,
                 searchTerm=search_string)
-        secret_ids = [secret.SecretId for secret in resp.SecretSummaries.SecretSummary]
+        if resp.SecretSummaries:
+            secret_ids = [secret.SecretId for secret in resp.SecretSummaries.SecretSummary]
+        else:
+            secret_ids = []
         return secret_ids
 
     def search_folders(self, search_string=''):
@@ -112,7 +115,10 @@ def main():
             for folder in result.Folders.Folder:
                 print(folder.Name)
         if args['secret']:
-            result = ssc.search_secrets(' '.join(args['<secret_name>']))
+            query = ' '.join(args['<secret_name>'])
+            result = ssc.search_secrets(query)
+            if len(result) == 0:
+                print('No secrets found matching: {}'.format(query))
             for num in result:
                 ssc.get_secret(num)
 
